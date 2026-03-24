@@ -163,7 +163,7 @@ function savePersistentStats(stats: PersistentStats): void {
 export function useGame() {
   const [numStrings, setNumStrings] = useState(4);
   const [maxFret, setMaxFret] = useState(12);
-  const [includeSharps, setIncludeSharps] = useState(false);
+  const [includeSharps] = useState(true);
   const [targetNote, setTargetNote] = useState('A');
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
@@ -365,11 +365,6 @@ export function useGame() {
     startRound(undefined, f, undefined);
   }, [startRound]);
 
-  const changeSharps = useCallback((s: boolean) => {
-    setIncludeSharps(s);
-    startRound(undefined, undefined, s);
-  }, [startRound]);
-
   const toggleMode = useCallback(() => {
     setMode(prevMode => {
       const newMode = prevMode === 'quiz' ? 'learn' : 'quiz';
@@ -417,7 +412,6 @@ export function useGame() {
     nextRound: () => startRound(),
     changeStrings,
     changeFrets,
-    changeSharps,
     startRound,
     toggleMode,
   };

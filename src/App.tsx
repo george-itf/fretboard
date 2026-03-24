@@ -24,7 +24,7 @@ const FRET_OPTIONS = [
 function App() {
   const {
     state, cellStates, handleClick, nextRound,
-    changeStrings, changeFrets, changeSharps, startRound,
+    changeStrings, changeFrets, startRound,
     toggleMode,
   } = useGame();
 
@@ -207,22 +207,6 @@ function App() {
               </button>
             ))}
           </div>
-
-          <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
-
-          {/* Sharps toggle */}
-          <button
-            className={cn(
-              "px-1 py-1 cursor-pointer bg-transparent border-none outline-none transition-all duration-150",
-              state.includeSharps
-                ? "text-[hsl(32,90%,56%)]"
-                : "text-[hsl(20,8%,48%)] hover:text-[hsl(20,8%,50%)]"
-            )}
-            style={{ fontFamily: 'inherit', fontSize: 'inherit', letterSpacing: 'inherit' }}
-            onClick={() => changeSharps(!state.includeSharps)}
-          >
-            #
-          </button>
 
           <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
 
