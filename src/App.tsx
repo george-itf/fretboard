@@ -25,7 +25,7 @@ function App() {
   const {
     state, cellStates, handleClick, nextRound,
     changeStrings, changeFrets, startRound,
-    toggleMode,
+    changeMode,
   } = useGame();
 
   const { toast, showToast } = useToast();
@@ -55,7 +55,7 @@ function App() {
 
   // Live timer tick
   useEffect(() => {
-    if (!timerOn || state.roundComplete || state.mode === 'learn') {
+    if (!timerOn || state.roundComplete || state.mode !== 'game') {
       return;
     }
     const iv = setInterval(() => {
@@ -102,7 +102,7 @@ function App() {
 
   // Generate random hint positions based on hintPct and roundKey
   const mergedCellStates = useMemo(() => {
-    if (hintPct === 0 || state.mode === 'learn') return cellStates;
+    if (hintPct === 0 || state.mode !== 'game') return cellStates;
 
     // Simple seeded pseudo-random from roundKey
     let seed = state.roundKey * 2654435761;
@@ -146,8 +146,8 @@ function App() {
 
       {/* ═══ TOP BAR: score + settings ═══ */}
       <div className="relative z-10 w-full px-3 sm:px-4 pt-3 sm:pt-5 flex flex-col sm:flex-row items-center sm:justify-between gap-1.5 sm:gap-4">
-        {/* Score cluster (hidden in learn mode) */}
-        {state.mode !== 'learn' && (
+        {/* Score cluster (only in game mode) */}
+        {state.mode === 'game' && (
           <div className="flex items-baseline gap-2 sm:gap-3 font-mono text-[12px] sm:text-[14px] tracking-wider whitespace-nowrap">
             <span className="text-[hsl(35,18%,55%)]">
               <span className="text-[hsl(35,22%,78%)] font-bold">{state.score}</span>
@@ -238,21 +238,25 @@ function App() {
 
           <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
 
-          {/* Learn/Quiz toggle */}
-          {toggleMode && (
-            <button
-              className={cn(
-                "px-1 py-1 cursor-pointer bg-transparent border-none outline-none transition-all duration-150",
-                state.mode === 'learn'
-                  ? "text-[hsl(32,90%,56%)]"
-                  : "text-[hsl(20,8%,48%)] hover:text-[hsl(20,8%,50%)]"
-              )}
-              style={{ fontFamily: 'inherit', fontSize: 'inherit', letterSpacing: 'inherit' }}
-              onClick={() => toggleMode()}
-            >
-              learn
-            </button>
-          )}
+          {/* Mode selector */}
+          <select
+            value={state.mode}
+            onChange={e => changeMode(e.target.value as 'game' | 'learn' | 'practice')}
+            className="bg-transparent border-none outline-none cursor-pointer text-[hsl(32,90%,56%)] appearance-none px-1 py-1"
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+              letterSpacing: 'inherit',
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='hsl(32,90%25,56%25)'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 2px center',
+              paddingRight: '14px',
+            }}
+          >
+            <option value="game" style={{ background: '#2a2520', color: '#e8d5b0' }}>game</option>
+            <option value="learn" style={{ background: '#2a2520', color: '#e8d5b0' }}>learn</option>
+            <option value="practice" style={{ background: '#2a2520', color: '#e8d5b0' }}>practice</option>
+          </select>
 
           <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
 
@@ -313,17 +317,21 @@ function App() {
             }}
           />
 
-          {state.mode === 'learn' ? (
-            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
-              LEARN MODE
-            </div>
-          ) : (
+          {state.mode === 'game' ? (
             <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
               Find all the
             </div>
+          ) : state.mode === 'learn' ? (
+            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+              LANDMARK NOTES
+            </div>
+          ) : (
+            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+              PRACTICE
+            </div>
           )}
 
-          {state.mode !== 'learn' && (
+          {state.mode === 'game' && (
             <div key={targetKey} className="animate-target-enter relative">
               <span
                 className="font-display text-6xl sm:text-[110px] font-normal leading-none"
@@ -342,7 +350,7 @@ function App() {
           )}
 
           {/* Progress + count (hidden in learn mode) */}
-          {state.mode !== 'learn' && (
+          {state.mode === 'game' && (
             <>
               <div className="mt-3 flex items-center justify-center gap-2 relative">
                 {Array.from({ length: state.total }).map((_, i) => (
@@ -378,7 +386,7 @@ function App() {
         </div>
 
         {/* Next button (appears on round complete, hidden in learn mode) */}
-        {state.roundComplete && state.mode !== 'learn' && (
+        {state.roundComplete && state.mode === 'game' && (
           <div className="flex flex-col items-center gap-2 animate-fade-in">
             <button
               className="cursor-pointer border-none outline-none bg-transparent"

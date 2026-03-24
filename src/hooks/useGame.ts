@@ -42,7 +42,7 @@ export interface GameState {
   roundComplete: boolean;
   activeStrings: string[];
   roundKey: number;
-  mode: 'quiz' | 'learn';
+  mode: 'game' | 'learn' | 'practice';
   roundTime: number;
   bestTime: number;
   highScore: number;
@@ -174,7 +174,7 @@ export function useGame() {
   const [roundComplete, setRoundComplete] = useState(false);
   const [cellStates, setCellStates] = useState<Map<string, NoteState>>(new Map());
   const [roundKey, setRoundKey] = useState(0);
-  const [mode, setMode] = useState<'quiz' | 'learn'>('quiz');
+  const [mode, setMode] = useState<'game' | 'learn' | 'practice'>('game');
   const [roundTime, setRoundTime] = useState(0);
   const [bestTime, setBestTime] = useState(0);
   const [highScore, setHighScore] = useState(0);
@@ -212,7 +212,7 @@ export function useGame() {
     strings?: number,
     frets?: number,
     sharps?: boolean,
-    overrideMode?: 'quiz' | 'learn'
+    overrideMode?: 'game' | 'learn' | 'practice'
   ) => {
     const ns = strings ?? numStrings;
     const mf = frets ?? maxFret;
@@ -220,26 +220,45 @@ export function useGame() {
     const as2 = getActiveStrings(ns);
     const currentMode = overrideMode ?? mode;
 
-    // In learn mode, don't pick a target note
-    if (currentMode === 'learn') {
+    if (currentMode === 'practice') {
+      // Practice: reveal all notes, click to hear them
       setTargetNote('');
       setTotal(0);
       setFoundSet(new Set());
       setRoundComplete(false);
       setRoundMisses(0);
 
-      // Reveal all notes
       const allNotes = new Map<string, NoteState>();
       for (const s of as2) {
         for (let f = 0; f <= mf; f++) {
-          const key = `${s}:${f}`;
-          allNotes.set(key, 'revealed');
+          allNotes.set(`${s}:${f}`, 'revealed');
         }
       }
       setCellStates(allNotes);
       setRoundKey(prev => prev + 1);
+    } else if (currentMode === 'learn') {
+      // Learn: show only dot fret positions (3, 5, 7, 9, 12) as landmarks
+      setTargetNote('');
+      setTotal(0);
+      setFoundSet(new Set());
+      setRoundComplete(false);
+      setRoundMisses(0);
+
+      const DOT_FRETS = [3, 5, 7, 9, 12];
+      const landmarkNotes = new Map<string, NoteState>();
+      for (const s of as2) {
+        // Also show open string (fret 0) as a reference point
+        landmarkNotes.set(`${s}:0`, 'revealed');
+        for (const f of DOT_FRETS) {
+          if (f <= mf) {
+            landmarkNotes.set(`${s}:${f}`, 'revealed');
+          }
+        }
+      }
+      setCellStates(landmarkNotes);
+      setRoundKey(prev => prev + 1);
     } else {
-      // Quiz mode
+      // Game: quiz mode - find all positions of a target note
       const note = pickNote(as2, mf, is, targetNote, missedNotesRef.current);
       const count = countPositions(note, as2, mf);
 
@@ -255,8 +274,8 @@ export function useGame() {
   }, [numStrings, maxFret, includeSharps, targetNote, mode]);
 
   const handleClick = useCallback((string: string, fret: number) => {
-    // In learn mode, return the note info so the app can play the sound
-    if (mode === 'learn') {
+    // In learn or practice mode, return the note info so the app can play the sound
+    if (mode === 'learn' || mode === 'practice') {
       const clickedNote = noteAt(string, fret);
       return { correct: true, note: displayNote(clickedNote), learnMode: true, rawNote: clickedNote, string, fret };
     }
@@ -365,21 +384,10 @@ export function useGame() {
     startRound(undefined, f, undefined);
   }, [startRound]);
 
-  const toggleMode = useCallback(() => {
-    setMode(prevMode => {
-      const newMode = prevMode === 'quiz' ? 'learn' : 'quiz';
-
-      if (newMode === 'learn') {
-        // Switching to learn mode - reveal all notes
-        startRound(undefined, undefined, undefined, 'learn');
-      } else {
-        // Switching to quiz mode - start a new round
-        startRound(undefined, undefined, undefined, 'quiz');
-      }
-
-      return newMode;
-    });
-  }, [numStrings, maxFret, startRound]);
+  const changeMode = useCallback((newMode: 'game' | 'learn' | 'practice') => {
+    setMode(newMode);
+    startRound(undefined, undefined, undefined, newMode);
+  }, [startRound]);
 
   // Note: initialization happens via startRound() called from App useEffect
 
@@ -413,6 +421,6 @@ export function useGame() {
     changeStrings,
     changeFrets,
     startRound,
-    toggleMode,
+    changeMode,
   };
 }
