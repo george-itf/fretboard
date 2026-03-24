@@ -25,7 +25,7 @@ function App() {
   const {
     state, cellStates, handleClick, nextRound,
     changeStrings, changeFrets, startRound,
-    changeMode,
+    changeMode, advanceLearn,
   } = useGame();
 
   const { toast, showToast } = useToast();
@@ -70,7 +70,7 @@ function App() {
     const result = handleClick(s, f);
     if (result) {
       if ((result as any).learnMode) {
-        // Learn mode: play the note at its actual string/fret position
+        // Learn/Practice: play the note at its actual position
         if (!muted) playCorrect((result as any).rawNote, (result as any).string, (result as any).fret);
         showToast(result.note, 'good');
       } else if (result.correct) {
@@ -87,20 +87,28 @@ function App() {
     return result;
   }, [handleClick, showToast, state.found, state.total, state.targetNote, muted]);
 
+  // Keyboard: space/enter for next round
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.key === ' ' || e.key === 'Enter') && state.roundComplete) {
         e.preventDefault();
-        nextRound();
+        if (state.mode === 'learn') {
+          advanceLearn();
+        } else {
+          nextRound();
+        }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.roundComplete, nextRound]);
+  }, [state.roundComplete, state.mode, nextRound, advanceLearn]);
 
   const found = state.found;
 
-  // Generate random hint positions based on hintPct and roundKey
+  // Is this a quiz-like learn phase (fill or quiz)?
+  const isLearnQuiz = state.mode === 'learn' && (state.learnPhase === 'fill' || state.learnPhase === 'quiz');
+
+  // Generate random hint positions based on hintPct and roundKey (game mode only)
   const mergedCellStates = useMemo(() => {
     if (hintPct === 0 || state.mode !== 'game') return cellStates;
 
@@ -139,6 +147,13 @@ function App() {
     return merged;
   }, [cellStates, hintPct, state.roundKey, state.mode, state.activeStrings, state.maxFret, state.targetNote]);
 
+  // Fill phase hint percentage label
+  const fillHintLabel = state.learnFillRound < 2 ? '70%' : state.learnFillRound < 4 ? '50%' : state.learnFillRound < 6 ? '30%' : state.learnFillRound < 8 ? '10%' : '0%';
+
+  // Tour: next button label
+  const tourStringsCount = state.numStrings;
+  const isLastTourString = state.learnStringIndex >= tourStringsCount - 1;
+
   return (
     <div className="vignette grain min-h-[100dvh] flex flex-col relative">
       {/* Ambient stage glow */}
@@ -146,8 +161,8 @@ function App() {
 
       {/* ═══ TOP BAR: score + settings ═══ */}
       <div className="relative z-10 w-full px-3 sm:px-4 pt-3 sm:pt-5 flex flex-col sm:flex-row items-center sm:justify-between gap-1.5 sm:gap-4">
-        {/* Score cluster (only in game mode) */}
-        {state.mode === 'game' && (
+        {/* Score cluster (game mode + learn fill/quiz) */}
+        {(state.mode === 'game' || isLearnQuiz) && (
           <div className="flex items-baseline gap-2 sm:gap-3 font-mono text-[12px] sm:text-[14px] tracking-wider whitespace-nowrap">
             <span className="text-[hsl(35,18%,55%)]">
               <span className="text-[hsl(35,22%,78%)] font-bold">{state.score}</span>
@@ -258,37 +273,40 @@ function App() {
             <option value="practice" style={{ background: '#2a2520', color: '#e8d5b0' }}>practice</option>
           </select>
 
-          <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
-
-          {/* Hints slider */}
-          <div className="flex items-center gap-1.5">
-            <span className={cn(
-              "text-[11px]",
-              hintPct > 0 ? "text-[hsl(32,90%,56%)]" : "text-[hsl(20,8%,48%)]"
-            )}>
-              hints
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={50}
-              step={5}
-              value={hintPct}
-              onChange={e => setHintPct(Number(e.target.value))}
-              className="w-[50px] sm:w-[60px] h-[3px] appearance-none rounded-full cursor-pointer"
-              style={{
-                background: hintPct > 0
-                  ? `linear-gradient(to right, hsl(32,80%,50%) ${hintPct * 2}%, hsl(20,6%,25%) ${hintPct * 2}%)`
-                  : 'hsl(20,6%,25%)',
-                accentColor: 'hsl(32,80%,50%)',
-              }}
-            />
-            {hintPct > 0 && (
-              <span className="text-[10px] text-[hsl(32,60%,50%)] tabular-nums w-[24px]">
-                {hintPct}%
-              </span>
-            )}
-          </div>
+          {/* Hints slider (game mode only) */}
+          {state.mode === 'game' && (
+            <>
+              <span className="text-[hsl(20,8%,30%)] text-[10px]">·</span>
+              <div className="flex items-center gap-1.5">
+                <span className={cn(
+                  "text-[11px]",
+                  hintPct > 0 ? "text-[hsl(32,90%,56%)]" : "text-[hsl(20,8%,48%)]"
+                )}>
+                  hints
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={50}
+                  step={5}
+                  value={hintPct}
+                  onChange={e => setHintPct(Number(e.target.value))}
+                  className="w-[50px] sm:w-[60px] h-[3px] appearance-none rounded-full cursor-pointer"
+                  style={{
+                    background: hintPct > 0
+                      ? `linear-gradient(to right, hsl(32,80%,50%) ${hintPct * 2}%, hsl(20,6%,25%) ${hintPct * 2}%)`
+                      : 'hsl(20,6%,25%)',
+                    accentColor: 'hsl(32,80%,50%)',
+                  }}
+                />
+                {hintPct > 0 && (
+                  <span className="text-[10px] text-[hsl(32,60%,50%)] tabular-nums w-[24px]">
+                    {hintPct}%
+                  </span>
+                )}
+              </div>
+            </>
+          )}
 
           {showSettingsHint && (
             <div className="absolute -bottom-4 right-0 font-mono text-[8px] text-[hsl(32,50%,45%)] tracking-wider animate-fade-in"
@@ -317,41 +335,29 @@ function App() {
             }}
           />
 
-          {state.mode === 'game' ? (
-            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
-              Find all the
-            </div>
-          ) : state.mode === 'learn' ? (
-            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
-              LANDMARK NOTES
-            </div>
-          ) : (
-            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
-              PRACTICE
-            </div>
-          )}
+          {/* MODE-SPECIFIC HERO CONTENT */}
 
-          {state.mode === 'game' && (
-            <div key={targetKey} className="animate-target-enter relative">
-              <span
-                className="font-display text-6xl sm:text-[110px] font-normal leading-none"
-                style={{
-                  color: 'hsl(38, 28%, 92%)',
-                  textShadow: `
-                    0 0 80px hsla(32, 60%, 50%, 0.12),
-                    0 0 30px hsla(32, 60%, 50%, 0.06),
-                    0 4px 8px rgba(0,0,0,0.4)
-                  `,
-                }}
-              >
-                {state.targetDisplay}
-              </span>
-            </div>
-          )}
-
-          {/* Progress + count (hidden in learn mode) */}
+          {/* GAME MODE */}
           {state.mode === 'game' && (
             <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                Find all the
+              </div>
+              <div key={targetKey} className="animate-target-enter relative">
+                <span
+                  className="font-display text-6xl sm:text-[110px] font-normal leading-none"
+                  style={{
+                    color: 'hsl(38, 28%, 92%)',
+                    textShadow: `
+                      0 0 80px hsla(32, 60%, 50%, 0.12),
+                      0 0 30px hsla(32, 60%, 50%, 0.06),
+                      0 4px 8px rgba(0,0,0,0.4)
+                    `,
+                  }}
+                >
+                  {state.targetDisplay}
+                </span>
+              </div>
               <div className="mt-3 flex items-center justify-center gap-2 relative">
                 {Array.from({ length: state.total }).map((_, i) => (
                   <div
@@ -368,7 +374,6 @@ function App() {
                   />
                 ))}
               </div>
-
               <div className="font-mono text-[13px] text-[hsl(20,10%,55%)] mt-1.5 relative flex items-center gap-3 justify-center">
                 <span>
                   <span className="text-[hsl(32,70%,52%)]">{found}</span>
@@ -383,9 +388,157 @@ function App() {
               </div>
             </>
           )}
+
+          {/* LEARN MODE - TOUR PHASE */}
+          {state.mode === 'learn' && state.learnPhase === 'tour' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                LEARN THE LANDMARKS
+              </div>
+              <div className="animate-target-enter relative">
+                <span
+                  className="font-display text-5xl sm:text-[80px] font-normal leading-none"
+                  style={{
+                    color: 'hsl(38, 28%, 92%)',
+                    textShadow: '0 0 30px hsla(32, 60%, 50%, 0.08), 0 4px 8px rgba(0,0,0,0.4)',
+                  }}
+                >
+                  {state.learnTourString} string
+                </span>
+              </div>
+              <div className="font-mono text-[12px] text-[hsl(20,10%,50%)] mt-3 relative">
+                tap each note to hear it
+              </div>
+              {/* Progress dots */}
+              <div className="mt-3 flex items-center justify-center gap-2 relative">
+                {Array.from({ length: state.total }).map((_, i) => (
+                  <div
+                    key={`${state.roundKey}-${i}`}
+                    className={cn("rounded-full transition-all", i < found ? "w-3.5 h-3.5" : "w-3 h-3")}
+                    style={i < found ? {
+                      background: 'radial-gradient(circle at 35% 30%, hsl(40,100%,68%), hsl(30,85%,48%))',
+                      boxShadow: '0 0 8px hsla(32,90%,54%,0.45)',
+                      animation: `progress-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards`,
+                    } : {
+                      background: 'hsl(20,6%,18%)',
+                      border: '1px solid hsl(20,6%,24%)',
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="font-mono text-[13px] text-[hsl(20,10%,55%)] mt-1.5 relative">
+                <span className="text-[hsl(32,70%,52%)]">{found}</span>
+                <span className="mx-1 text-[hsl(20,8%,38%)]">/</span>
+                {state.total}
+              </div>
+              {/* String progress indicator */}
+              <div className="font-mono text-[10px] text-[hsl(20,8%,40%)] mt-2 tracking-wider">
+                string {state.learnStringIndex + 1} of {state.numStrings}
+              </div>
+            </>
+          )}
+
+          {/* LEARN MODE - FILL PHASE */}
+          {state.mode === 'learn' && state.learnPhase === 'fill' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                FIND AT LANDMARKS
+              </div>
+              <div key={targetKey} className="animate-target-enter relative">
+                <span
+                  className="font-display text-6xl sm:text-[110px] font-normal leading-none"
+                  style={{
+                    color: 'hsl(38, 28%, 92%)',
+                    textShadow: `
+                      0 0 80px hsla(32, 60%, 50%, 0.12),
+                      0 0 30px hsla(32, 60%, 50%, 0.06),
+                      0 4px 8px rgba(0,0,0,0.4)
+                    `,
+                  }}
+                >
+                  {state.targetDisplay}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-2 relative">
+                {Array.from({ length: state.total }).map((_, i) => (
+                  <div
+                    key={`${state.roundKey}-${i}`}
+                    className={cn("rounded-full transition-all", i < found ? "w-3.5 h-3.5" : "w-3 h-3")}
+                    style={i < found ? {
+                      background: 'radial-gradient(circle at 35% 30%, hsl(40,100%,68%), hsl(30,85%,48%))',
+                      boxShadow: '0 0 8px hsla(32,90%,54%,0.45)',
+                      animation: `progress-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards`,
+                    } : {
+                      background: 'hsl(20,6%,18%)',
+                      border: '1px solid hsl(20,6%,24%)',
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="font-mono text-[13px] text-[hsl(20,10%,55%)] mt-1.5 relative">
+                <span className="text-[hsl(32,70%,52%)]">{found}</span>
+                <span className="mx-1 text-[hsl(20,8%,38%)]">/</span>
+                {state.total}
+                <span className="ml-3 text-[10px] text-[hsl(20,8%,40%)]">hints {fillHintLabel}</span>
+              </div>
+            </>
+          )}
+
+          {/* LEARN MODE - QUIZ PHASE */}
+          {state.mode === 'learn' && state.learnPhase === 'quiz' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                LANDMARK QUIZ
+              </div>
+              <div key={targetKey} className="animate-target-enter relative">
+                <span
+                  className="font-display text-6xl sm:text-[110px] font-normal leading-none"
+                  style={{
+                    color: 'hsl(38, 28%, 92%)',
+                    textShadow: `
+                      0 0 80px hsla(32, 60%, 50%, 0.12),
+                      0 0 30px hsla(32, 60%, 50%, 0.06),
+                      0 4px 8px rgba(0,0,0,0.4)
+                    `,
+                  }}
+                >
+                  {state.targetDisplay}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-2 relative">
+                {Array.from({ length: state.total }).map((_, i) => (
+                  <div
+                    key={`${state.roundKey}-${i}`}
+                    className={cn("rounded-full transition-all", i < found ? "w-3.5 h-3.5" : "w-3 h-3")}
+                    style={i < found ? {
+                      background: 'radial-gradient(circle at 35% 30%, hsl(40,100%,68%), hsl(30,85%,48%))',
+                      boxShadow: '0 0 8px hsla(32,90%,54%,0.45)',
+                      animation: `progress-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards`,
+                    } : {
+                      background: 'hsl(20,6%,18%)',
+                      border: '1px solid hsl(20,6%,24%)',
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="font-mono text-[13px] text-[hsl(20,10%,55%)] mt-1.5 relative">
+                <span className="text-[hsl(32,70%,52%)]">{found}</span>
+                <span className="mx-1 text-[hsl(20,8%,38%)]">/</span>
+                {state.total}
+                <span className="ml-3 text-[10px] text-[hsl(32,50%,50%)]">no hints</span>
+              </div>
+            </>
+          )}
+
+          {/* PRACTICE MODE */}
+          {state.mode === 'practice' && (
+            <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+              PRACTICE
+            </div>
+          )}
         </div>
 
-        {/* Next button (appears on round complete, hidden in learn mode) */}
+        {/* Next button - GAME MODE */}
         {state.roundComplete && state.mode === 'game' && (
           <div className="flex flex-col items-center gap-2 animate-fade-in">
             <button
@@ -407,6 +560,35 @@ function App() {
             {state.roundTime !== undefined && state.roundTime > 0 && (
               <div className="font-mono text-[10px] text-[hsl(32,50%,45%)]">
                 {(state.roundTime / 1000).toFixed(1)}s
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Next button - LEARN MODE */}
+        {state.roundComplete && state.mode === 'learn' && (
+          <div className="flex flex-col items-center gap-2 animate-fade-in">
+            <button
+              className="cursor-pointer border-none outline-none bg-transparent"
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.25em',
+                textTransform: 'uppercase' as const,
+                padding: '12px 24px',
+                color: 'hsl(32,70%,58%)',
+                textShadow: '0 0 20px hsla(32,80%,50%,0.3)',
+              }}
+              onClick={advanceLearn}
+            >
+              {state.learnPhase === 'tour'
+                ? (isLastTourString ? 'start practice' : `next: ${(['E', 'A', 'D', 'G'] as const)[state.learnStringIndex + 1]} string`)
+                : 'tap to continue'}
+            </button>
+            {state.learnPhase === 'fill' && state.learnFillRound >= 9 && (
+              <div className="font-mono text-[10px] text-[hsl(32,50%,50%)] tracking-wider">
+                next: landmark quiz
               </div>
             )}
           </div>
