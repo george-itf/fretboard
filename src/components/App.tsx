@@ -4,11 +4,13 @@
 // All game logic delegated to useGameEngine.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Mode, IdentifyPhase } from '@/types.ts';
+import type { Mode, IdentifyPhase, ScaleType, ScalePhase } from '@/types.ts';
+import { ALL_NOTES } from '@/types.ts';
 import { useGameEngine } from '@/hooks/useGameEngine.ts';
 import { displayNote } from '@/engine/music.ts';
+import { scaleDisplayName } from '@/engine/scales.ts';
 import { computeHints } from '@/engine/hints.ts';
-import { playCorrect, playWrong, playComplete } from '@/audio/synth.ts';
+import { playCorrect, playWrong, playComplete, startDrone, stopDrone } from '@/audio/synth.ts';
 import Fretboard from '@/components/Fretboard.tsx';
 import ChoiceButtons from '@/components/ChoiceButtons.tsx';
 import ScoreBar from '@/components/ScoreBar.tsx';
@@ -33,12 +35,26 @@ const FRET_OPTIONS = [
 const NAME_CHOICE_OPTIONS = [4, 6, 8];
 const FIND_CHOICE_OPTIONS = [4, 6, 8, 10, 12];
 
+const SCALE_TYPES: { val: ScaleType; label: string }[] = [
+  { val: 'minor-pentatonic', label: 'Min Pent' },
+  { val: 'major-pentatonic', label: 'Maj Pent' },
+  { val: 'blues', label: 'Blues' },
+  { val: 'major', label: 'Major' },
+  { val: 'natural-minor', label: 'Minor' },
+];
+const SCALE_PHASES: { val: ScalePhase; label: string }[] = [
+  { val: 'learn-scale', label: 'learn' },
+  { val: 'degree-game', label: 'find' },
+  { val: 'name-degree', label: 'name' },
+];
+
 /* ═══════════════════════════════════════════════════ */
 
 function App() {
   const {
-    state, startRound, handleClick, handleNameAnswer,
+    state, startRound, handleClick, handleNameAnswer, handleDegreeAnswer,
     changeStrings, changeFrets, changeMode, changeIdentifyPhase, changeIdentifyChoices,
+    changeScaleRoot, changeScaleType, changeScalePhase,
   } = useGameEngine();
 
   const { toast, showToast } = useToast();
@@ -86,7 +102,25 @@ function App() {
     return () => clearTimeout(timer);
   }, [state.identifyAnswered, state.identifyLastResult, state.mode, startRound]);
 
-  // Keyboard: space/enter for next round
+  // Auto-advance after answering in scale name-degree mode
+  useEffect(() => {
+    if (state.mode !== 'scales' || state.scalePhase !== 'name-degree' || !state.identifyAnswered) return;
+    const delay = state.identifyLastResult?.correct ? 1000 : 1800;
+    const timer = setTimeout(() => startRound(), delay);
+    return () => clearTimeout(timer);
+  }, [state.identifyAnswered, state.identifyLastResult, state.mode, state.scalePhase, startRound]);
+
+  // Drone lifecycle: start when entering scale mode, stop when leaving
+  useEffect(() => {
+    if (state.mode === 'scales' && !muted) {
+      startDrone(state.scaleRoot);
+    } else {
+      stopDrone();
+    }
+    return () => stopDrone();
+  }, [state.mode, state.scaleRoot, muted]);
+
+  // Keyboard: space/enter for next round (game + scale degree-game)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.key === ' ' || e.key === 'Enter') && state.roundComplete) {
@@ -130,6 +164,24 @@ function App() {
         if (!muted) playWrong();
         showToast(`That's ${result.note}`, 'bad');
         break;
+      case 'scale-learn':
+        if (!muted) playCorrect(result.rawNote, result.string, result.fret);
+        showToast(`${result.degree} — ${result.note}`, 'good');
+        break;
+      case 'scale-play-only':
+        if (!muted) playCorrect(result.rawNote, result.string, result.fret);
+        break;
+      case 'scale-degree-correct':
+        if (!muted) playCorrect(state.targetNote || state.targetDegree, result.string, result.fret);
+        if (result.roundDone) {
+          showToast('All found!', 'good');
+          if (!muted) setTimeout(() => playComplete(), 120);
+        }
+        break;
+      case 'scale-degree-wrong':
+        if (!muted) playWrong();
+        showToast(`That's ${result.note}`, 'bad');
+        break;
     }
     return result;
   }, [handleClick, showToast, state.targetNote, muted]);
@@ -146,6 +198,19 @@ function App() {
       if (!muted) playWrong();
     }
   }, [handleNameAnswer, muted]);
+
+  // ── Degree answer with audio ──
+
+  const onDegreeAnswer = useCallback((degree: string) => {
+    const result = handleDegreeAnswer(degree);
+    if (!result) return;
+
+    if (result.kind === 'degree-correct') {
+      if (!muted) playCorrect(undefined, result.string, result.fret);
+    } else {
+      if (!muted) playWrong();
+    }
+  }, [handleDegreeAnswer, muted]);
 
   // ── Computed values ──
 
@@ -166,7 +231,8 @@ function App() {
     return FIND_CHOICE_OPTIONS.filter(n => n <= state.maxFret + 1);
   }, [state.maxFret]);
 
-  const showScore = state.mode === 'game' || state.mode === 'identify';
+  const showScore = state.mode === 'game' || state.mode === 'identify'
+    || (state.mode === 'scales' && state.scalePhase !== 'learn-scale');
   const found = state.foundKeys.size;
 
   return (
@@ -276,6 +342,7 @@ function App() {
           >
             <option value="game" style={{ background: '#2a2520', color: '#e8d5b0' }}>game</option>
             <option value="identify" style={{ background: '#2a2520', color: '#e8d5b0' }}>identify</option>
+            <option value="scales" style={{ background: '#2a2520', color: '#e8d5b0' }}>scales</option>
             <option value="learn" style={{ background: '#2a2520', color: '#e8d5b0' }}>learn</option>
             <option value="practice" style={{ background: '#2a2520', color: '#e8d5b0' }}>practice</option>
           </select>
@@ -352,6 +419,80 @@ function App() {
                     onClick={() => changeIdentifyChoices(n)}
                   >
                     {n}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Scale mode settings */}
+          {state.mode === 'scales' && (
+            <>
+              <span className="text-[hsl(20,8%,30%)] text-[10px]">&middot;</span>
+
+              {/* Root note picker */}
+              <select
+                value={state.scaleRoot}
+                onChange={e => changeScaleRoot(e.target.value)}
+                className="bg-transparent border-none outline-none cursor-pointer text-[hsl(32,90%,56%)] appearance-none px-1 py-1"
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 'inherit',
+                  letterSpacing: 'inherit',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='hsl(32,90%25,56%25)'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 2px center',
+                  paddingRight: '14px',
+                }}
+              >
+                {ALL_NOTES.map(n => (
+                  <option key={n} value={n} style={{ background: '#2a2520', color: '#e8d5b0' }}>
+                    {displayNote(n)}
+                  </option>
+                ))}
+              </select>
+
+              <span className="text-[hsl(20,8%,30%)] text-[10px]">&middot;</span>
+
+              {/* Scale type picker */}
+              <select
+                value={state.scaleType}
+                onChange={e => changeScaleType(e.target.value as ScaleType)}
+                className="bg-transparent border-none outline-none cursor-pointer text-[hsl(32,90%,56%)] appearance-none px-1 py-1"
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 'inherit',
+                  letterSpacing: 'inherit',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='hsl(32,90%25,56%25)'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 2px center',
+                  paddingRight: '14px',
+                }}
+              >
+                {SCALE_TYPES.map(st => (
+                  <option key={st.val} value={st.val} style={{ background: '#2a2520', color: '#e8d5b0' }}>
+                    {st.label}
+                  </option>
+                ))}
+              </select>
+
+              <span className="text-[hsl(20,8%,30%)] text-[10px]">&middot;</span>
+
+              {/* Phase picker */}
+              <div className="flex gap-0">
+                {SCALE_PHASES.map(sp => (
+                  <button
+                    key={sp.val}
+                    className={cn(
+                      "px-1 sm:px-1.5 py-1 cursor-pointer bg-transparent border-none outline-none transition-all duration-150",
+                      state.scalePhase === sp.val
+                        ? "text-[hsl(32,90%,56%)]"
+                        : "text-[hsl(20,8%,48%)] hover:text-[hsl(20,8%,50%)]"
+                    )}
+                    style={{ fontFamily: 'inherit', fontSize: 'inherit', letterSpacing: 'inherit' }}
+                    onClick={() => changeScalePhase(sp.val)}
+                  >
+                    {sp.label}
                   </button>
                 ))}
               </div>
@@ -450,6 +591,82 @@ function App() {
             </div>
           )}
 
+          {/* Scale: Learn hero */}
+          {state.mode === 'scales' && state.scalePhase === 'learn-scale' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                {displayNote(state.scaleRoot)} {scaleDisplayName(state.scaleType)}
+              </div>
+              <div className="text-[9px] sm:text-[10px] font-mono text-[hsl(20,8%,42%)] tracking-wider relative">
+                tap any note to hear it
+              </div>
+            </>
+          )}
+
+          {/* Scale: Degree Game hero */}
+          {state.mode === 'scales' && state.scalePhase === 'degree-game' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                Find all the
+              </div>
+              <div key={`deg-${state.roundKey}`} className="animate-target-enter relative">
+                <span
+                  className="font-display text-5xl sm:text-[90px] font-normal leading-none"
+                  style={{
+                    color: 'hsl(38, 28%, 92%)',
+                    textShadow: '0 0 80px hsla(32, 60%, 50%, 0.12), 0 0 30px hsla(32, 60%, 50%, 0.06), 0 4px 8px rgba(0,0,0,0.4)',
+                  }}
+                >
+                  {state.targetDegree}
+                </span>
+              </div>
+              <div className="text-[9px] sm:text-[10px] font-mono text-[hsl(20,8%,42%)] mt-1 tracking-wider relative">
+                in {displayNote(state.scaleRoot)} {scaleDisplayName(state.scaleType)}
+              </div>
+            </>
+          )}
+
+          {/* Scale: Name Degree hero */}
+          {state.mode === 'scales' && state.scalePhase === 'name-degree' && (
+            <>
+              <div className="text-[11px] sm:text-[12px] font-semibold tracking-[0.35em] uppercase text-[hsl(20,10%,58%)] mb-1 relative">
+                NAME THE DEGREE
+              </div>
+              <div className="text-[9px] sm:text-[10px] font-mono text-[hsl(20,8%,42%)] tracking-wider relative">
+                {displayNote(state.scaleRoot)} {scaleDisplayName(state.scaleType)}
+              </div>
+            </>
+          )}
+
+          {/* Scale degree-game progress */}
+          {state.mode === 'scales' && state.scalePhase === 'degree-game' && (
+            <>
+              <div className="mt-3 flex items-center justify-center gap-2 relative">
+                {Array.from({ length: state.totalPositions }).map((_, i) => (
+                  <div
+                    key={`${state.roundKey}-${i}`}
+                    className={cn("rounded-full transition-all", i < found ? "w-3.5 h-3.5" : "w-3 h-3")}
+                    style={i < found ? {
+                      background: 'radial-gradient(circle at 35% 30%, hsl(40,100%,68%), hsl(30,85%,48%))',
+                      boxShadow: '0 0 8px hsla(32,90%,54%,0.45)',
+                      animation: 'progress-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+                    } : {
+                      background: 'hsl(20,6%,18%)',
+                      border: '1px solid hsl(20,6%,24%)',
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="font-mono text-[13px] text-[hsl(20,10%,55%)] mt-1.5 relative flex items-center gap-3 justify-center">
+                <span>
+                  <span className="text-[hsl(32,70%,52%)]">{found}</span>
+                  <span className="mx-1 text-[hsl(20,8%,38%)]">/</span>
+                  {state.totalPositions}
+                </span>
+              </div>
+            </>
+          )}
+
           {/* Progress dots (game mode) */}
           {state.mode === 'game' && (
             <>
@@ -498,6 +715,44 @@ function App() {
           />
         )}
 
+        {/* Degree choice buttons (scale/name-degree) */}
+        {state.mode === 'scales' && state.scalePhase === 'name-degree' && (
+          <ChoiceButtons
+            choices={state.degreeChoices}
+            correctAnswer={state.identifyCorrectAnswer}
+            answered={state.identifyAnswered}
+            lastResult={state.identifyLastResult}
+            roundKey={state.roundKey}
+            onAnswer={onDegreeAnswer}
+          />
+        )}
+
+        {/* Next button (scale degree-game round complete) */}
+        {state.roundComplete && state.mode === 'scales' && state.scalePhase === 'degree-game' && (
+          <div className="flex flex-col items-center gap-2 animate-fade-in">
+            <button
+              className="cursor-pointer border-none outline-none bg-transparent"
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 11, fontWeight: 600,
+                letterSpacing: '0.25em',
+                textTransform: 'uppercase' as const,
+                padding: '12px 24px',
+                color: 'hsl(32,70%,58%)',
+                textShadow: '0 0 20px hsla(32,80%,50%,0.3)',
+              }}
+              onClick={() => startRound()}
+            >
+              tap to continue
+            </button>
+            {state.roundTime > 0 && (
+              <div className="font-mono text-[10px] text-[hsl(32,50%,45%)]">
+                {(state.roundTime / 1000).toFixed(1)}s
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Next button (game mode round complete) */}
         {state.roundComplete && state.mode === 'game' && (
           <div className="flex flex-col items-center gap-2 animate-fade-in">
@@ -535,6 +790,7 @@ function App() {
               roundKey={state.roundKey}
               onCellClick={onCellClick}
               dimStrings={dimStrings}
+              scaleMap={state.mode === 'scales' ? state.scaleMap : undefined}
             />
           </div>
         </div>

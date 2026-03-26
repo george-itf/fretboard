@@ -4,8 +4,18 @@ export const ALL_NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 
 export const ALL_STRINGS = ['E', 'A', 'D', 'G'] as const;
 
 export type NoteState = 'hidden' | 'correct' | 'wrong' | 'revealed' | 'hint' | 'target' | 'selectable';
-export type Mode = 'game' | 'learn' | 'practice' | 'identify';
+export type Mode = 'game' | 'learn' | 'practice' | 'identify' | 'scales';
 export type IdentifyPhase = 'name' | 'find';
+export type ScaleType = 'major' | 'natural-minor' | 'minor-pentatonic' | 'major-pentatonic' | 'blues';
+export type ScalePhase = 'learn-scale' | 'degree-game' | 'name-degree';
+
+// ─── Scale Degree Info ───
+
+export interface DegreeInfo {
+  label: string;    // 'R', 'b3', '5', etc.
+  color: string;    // HSL color string
+  semitone: number; // interval from root (0-11)
+}
 
 // ─── Game State ───
 
@@ -37,6 +47,14 @@ export interface GameState {
   identifyCorrectAnswer: string;
   identifyLastResult: { correct: boolean; picked: string } | null;
 
+  // Scale mode
+  scaleRoot: string;
+  scaleType: ScaleType;
+  scalePhase: ScalePhase;
+  targetDegree: string;
+  degreeChoices: string[];
+  scaleMap: Map<string, DegreeInfo>;
+
   // Scoring
   score: number;
   streak: number;
@@ -48,7 +66,7 @@ export interface GameState {
   roundTime: number;
 }
 
-// ─── Typed Results (no more `as any`) ───
+// ─── Typed Results ───
 
 export type ClickResult =
   | { kind: 'learn'; note: string; rawNote: string; string: string; fret: number }
@@ -56,11 +74,19 @@ export type ClickResult =
   | { kind: 'game-correct'; note: string; string: string; fret: number; roundDone: boolean }
   | { kind: 'game-wrong'; note: string }
   | { kind: 'identify-find-correct'; note: string; string: string; fret: number }
-  | { kind: 'identify-find-wrong'; note: string; string: string; fret: number };
+  | { kind: 'identify-find-wrong'; note: string; string: string; fret: number }
+  | { kind: 'scale-learn'; note: string; rawNote: string; string: string; fret: number; degree: string }
+  | { kind: 'scale-degree-correct'; note: string; string: string; fret: number; roundDone: boolean }
+  | { kind: 'scale-degree-wrong'; note: string }
+  | { kind: 'scale-play-only'; rawNote: string; string: string; fret: number };
 
 export type NameAnswerResult =
   | { kind: 'name-correct'; note: string; string: string; fret: number }
   | { kind: 'name-wrong'; note: string; correctNote: string };
+
+export type DegreeAnswerResult =
+  | { kind: 'degree-correct'; degree: string; string: string; fret: number }
+  | { kind: 'degree-wrong'; picked: string; correctDegree: string };
 
 // ─── Persistence ───
 

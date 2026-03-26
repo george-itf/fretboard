@@ -133,6 +133,64 @@ export function playWrong(): void {
   } catch (_) { /* Audio not available */ }
 }
 
+// ─── Drone ───
+//
+// Sustained root note for scale practice. Low volume, warm pad.
+// Persists until stopDrone() is called.
+
+let droneOsc: OscillatorNode | null = null;
+let droneGain: GainNode | null = null;
+
+/** Start a sustained drone on the root note. Replaces any existing drone. */
+export function startDrone(rootNote: string): void {
+  stopDrone();
+  try {
+    const ac = getCtx();
+    const t = ac.currentTime;
+    const freq = NOTE_FREQ_FALLBACK[rootNote] || 82.41;
+
+    // Use a lower octave for the drone to sit underneath
+    const droneFreq = freq / 2;
+
+    const osc = ac.createOscillator();
+    osc.setPeriodicWave(getBassWave(ac));
+    osc.frequency.setValueAtTime(droneFreq, t);
+
+    const filter = ac.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(200, t);
+    filter.Q.setValueAtTime(0.5, t);
+
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(0.0, t);
+    amp.gain.linearRampToValueAtTime(0.12, t + 0.8); // slow fade in
+
+    osc.connect(filter);
+    filter.connect(amp);
+    amp.connect(ac.destination);
+    osc.start(t);
+
+    droneOsc = osc;
+    droneGain = amp;
+  } catch (_) { /* Audio not available */ }
+}
+
+/** Fade out and stop the drone. */
+export function stopDrone(): void {
+  try {
+    if (droneGain && droneOsc) {
+      const ac = getCtx();
+      const t = ac.currentTime;
+      droneGain.gain.cancelScheduledValues(t);
+      droneGain.gain.setValueAtTime(droneGain.gain.value, t);
+      droneGain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      droneOsc.stop(t + 0.35);
+    }
+  } catch (_) { /* Already stopped */ }
+  droneOsc = null;
+  droneGain = null;
+}
+
 /** Round complete: ascending arpeggio E-A-D-G, staggered 100ms apart. */
 export function playComplete(): void {
   try {

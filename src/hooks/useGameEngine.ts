@@ -5,13 +5,15 @@
 // Results returned to caller for audio/toast side effects.
 
 import { useReducer, useCallback, useRef, useEffect } from 'react';
-import type { GameState, Mode, IdentifyPhase, ClickResult, NameAnswerResult } from '@/types.ts';
+import type { GameState, Mode, IdentifyPhase, ClickResult, NameAnswerResult, DegreeAnswerResult, ScaleType, ScalePhase } from '@/types.ts';
 import { noteAt, cellKey, displayNote, countPositions, getActiveStrings } from '@/engine/music.ts';
 import { loadStats, saveStats } from '@/engine/persistence.ts';
+import { countDegreePositions, getDegreePositions } from '@/engine/scales.ts';
 import {
   startPracticeRound, startLearnRound,
   startIdentifyNameRound, startIdentifyFindRound,
   startGameRound,
+  startScaleLearnRound, startScaleDegreeGameRound, startScaleNameDegreeRound,
 } from '@/engine/rounds.ts';
 
 // ─── Initial state ───
@@ -39,6 +41,14 @@ function createInitialState(): GameState {
     identifyAnswered: false,
     identifyCorrectAnswer: '',
     identifyLastResult: null,
+    // Scale mode defaults
+    scaleRoot: 'C',
+    scaleType: 'minor-pentatonic',
+    scalePhase: 'learn-scale',
+    targetDegree: '',
+    degreeChoices: [],
+    scaleMap: new Map(),
+    // Scoring
     score: 0,
     streak: 0,
     bestStreak: 0,
@@ -115,8 +125,6 @@ export function useGameEngine() {
   }, [state.highScore, state.bestStreak, state.bestTime, state.totalRounds]);
 
   // ── Start Round ──
-  // Accepts optional overrides (used by settings changes to atomically
-  // update a setting + start a new round in one dispatch).
 
   const startRound = useCallback((overrides?: Partial<GameState>) => {
     const effective = { ...stateRef.current, ...overrides } as GameState;
@@ -134,12 +142,24 @@ export function useGameEngine() {
           ? startIdentifyNameRound(effective)
           : startIdentifyFindRound(effective);
         break;
+      case 'scales':
+        switch (effective.scalePhase) {
+          case 'degree-game':
+            patch = startScaleDegreeGameRound(effective);
+            break;
+          case 'name-degree':
+            patch = startScaleNameDegreeRound(effective);
+            break;
+          default:
+            patch = startScaleLearnRound(effective);
+            break;
+        }
+        break;
       default:
         patch = startGameRound(effective, missedNotesRef.current);
         break;
     }
 
-    // Merge overrides into patch so the setting change persists
     dispatch({ type: 'PATCH', patch: { ...overrides, ...patch } });
   }, []);
 
@@ -150,9 +170,8 @@ export function useGameEngine() {
     const clickedNote = noteAt(string, fret);
     const display = displayNote(clickedNote);
 
-    // Learn / Practice — play the note, reveal it
+    // Learn / Practice
     if (s.mode === 'learn' || s.mode === 'practice') {
-      // In learn mode, reveal tapped notes
       if (s.mode === 'learn') {
         const key = cellKey(string, fret);
         if (!s.cellStates.has(key)) {
@@ -168,12 +187,10 @@ export function useGameEngine() {
     if (s.mode === 'identify') {
       if (s.identifyAnswered) return undefined;
 
-      // Name phase: tapping fretboard just plays the note, doesn't answer
       if (s.identifyPhase === 'name') {
         return { kind: 'play-only', rawNote: clickedNote, string, fret };
       }
 
-      // Find phase: only the target string, only selectable frets
       if (string !== s.identifyString) return undefined;
       if (!s.selectableFrets.includes(fret)) return undefined;
 
@@ -184,7 +201,6 @@ export function useGameEngine() {
       const newCells = new Map(s.cellStates);
       newCells.set(cellKey(string, fret), correct ? 'correct' : 'wrong');
 
-      // If wrong, reveal correct positions
       if (!correct) {
         for (const f of s.selectableFrets) {
           if (noteAt(string, f) === s.targetNote) {
@@ -211,13 +227,107 @@ export function useGameEngine() {
         : { kind: 'identify-find-wrong', note: display, string, fret };
     }
 
+    // ── Scale mode ──
+    if (s.mode === 'scales') {
+      const key = cellKey(string, fret);
+      const degreeInfo = s.scaleMap.get(key);
+
+      // Scale Learn: tap to hear, show degree toast
+      if (s.scalePhase === 'learn-scale') {
+        if (degreeInfo) {
+          return { kind: 'scale-learn', note: display, rawNote: clickedNote, string, fret, degree: degreeInfo.label };
+        }
+        // Tapped outside the scale
+        return undefined;
+      }
+
+      // Name Degree: tapping fretboard just plays the note
+      if (s.scalePhase === 'name-degree') {
+        if (s.identifyAnswered) return undefined;
+        if (degreeInfo) {
+          return { kind: 'scale-play-only', rawNote: clickedNote, string, fret };
+        }
+        return undefined;
+      }
+
+      // Degree Game: find all positions of the target degree
+      if (s.scalePhase === 'degree-game') {
+        if (s.roundComplete) return undefined;
+        if (s.foundKeys.has(key)) return undefined;
+
+        const isTarget = degreeInfo && degreeInfo.label === s.targetDegree;
+
+        if (isTarget) {
+          const newFound = new Set(s.foundKeys);
+          newFound.add(key);
+          const newStreak = streakRef.current + 1;
+          streakRef.current = newStreak;
+
+          const newCells = new Map(s.cellStates);
+          newCells.set(key, 'correct');
+
+          const totalCount = countDegreePositions(s.targetDegree, s.scaleMap);
+          const roundDone = newFound.size >= totalCount;
+
+          const patch: Partial<GameState> = {
+            foundKeys: newFound,
+            score: s.score + 1,
+            streak: newStreak,
+            bestStreak: Math.max(s.bestStreak, newStreak),
+            cellStates: newCells,
+          };
+
+          if (roundDone) {
+            const elapsed = Date.now() - s.roundStartTime;
+            patch.roundComplete = true;
+            patch.roundTime = elapsed;
+            patch.totalRounds = s.totalRounds + 1;
+            if (s.bestTime === 0 || elapsed < s.bestTime) patch.bestTime = elapsed;
+            if (s.score + 1 > s.highScore) patch.highScore = s.score + 1;
+
+            // Reveal remaining target positions
+            const remaining = getDegreePositions(s.targetDegree, s.scaleMap);
+            for (const k of remaining) {
+              if (!newFound.has(k)) {
+                newCells.set(k, 'revealed');
+              }
+            }
+            patch.cellStates = new Map(newCells);
+          }
+
+          dispatch({ type: 'PATCH', patch });
+          return { kind: 'scale-degree-correct', note: display, string, fret, roundDone };
+        } else {
+          // Wrong: either not in scale or wrong degree
+          streakRef.current = 0;
+          const newCells = new Map(s.cellStates);
+          newCells.set(key, 'wrong');
+
+          dispatch({
+            type: 'PATCH',
+            patch: {
+              misses: s.misses + 1,
+              score: Math.max(0, s.score - 1),
+              roundMisses: s.roundMisses + 1,
+              streak: 0,
+              cellStates: newCells,
+            },
+          });
+
+          setTimeout(() => dispatch({ type: 'CLEAR_WRONG', key }), 600);
+          return { kind: 'scale-degree-wrong', note: display };
+        }
+      }
+
+      return undefined;
+    }
+
     // ── Game mode ──
     if (s.roundComplete) return undefined;
     const key = cellKey(string, fret);
     if (s.foundKeys.has(key)) return undefined;
 
     if (clickedNote === s.targetNote) {
-      // Correct
       const newFound = new Set(s.foundKeys);
       newFound.add(key);
       const newStreak = streakRef.current + 1;
@@ -245,7 +355,6 @@ export function useGameEngine() {
         if (s.bestTime === 0 || elapsed < s.bestTime) patch.bestTime = elapsed;
         if (s.score + 1 > s.highScore) patch.highScore = s.score + 1;
 
-        // Missed notes tracking for weighted selection
         if (s.roundMisses > 0) {
           const c = missedNotesRef.current.get(s.targetNote) || 0;
           missedNotesRef.current.set(s.targetNote, c + 1);
@@ -254,7 +363,6 @@ export function useGameEngine() {
           if (c > 0) missedNotesRef.current.set(s.targetNote, c - 1);
         }
 
-        // Reveal remaining target positions
         for (const str of s.activeStrings) {
           for (let f = 0; f <= s.maxFret; f++) {
             const k = cellKey(str, f);
@@ -269,7 +377,6 @@ export function useGameEngine() {
       dispatch({ type: 'PATCH', patch });
       return { kind: 'game-correct', note: display, string, fret, roundDone };
     } else {
-      // Wrong
       streakRef.current = 0;
       const newCells = new Map(s.cellStates);
       newCells.set(key, 'wrong');
@@ -285,9 +392,7 @@ export function useGameEngine() {
         },
       });
 
-      // Clear wrong state after shake animation
       setTimeout(() => dispatch({ type: 'CLEAR_WRONG', key }), 600);
-
       return { kind: 'game-wrong', note: display };
     }
   }, []);
@@ -302,7 +407,6 @@ export function useGameEngine() {
     const newStreak = correct ? streakRef.current + 1 : 0;
     streakRef.current = newStreak;
 
-    // BUG FIX: was `correct ? 'correct' : 'correct'` — both branches identical
     const newCells = new Map(s.cellStates);
     if (s.highlightedPos) {
       newCells.set(
@@ -320,7 +424,6 @@ export function useGameEngine() {
         streak: newStreak,
         ...(correct
           ? { score: s.score + 1, bestStreak: Math.max(s.bestStreak, newStreak) }
-          // BUG FIX: identify mode now deducts points on wrong answer
           : { score: Math.max(0, s.score - 1), misses: s.misses + 1 }),
       },
     });
@@ -329,6 +432,43 @@ export function useGameEngine() {
       return { kind: 'name-correct', note, string: s.highlightedPos.string, fret: s.highlightedPos.fret };
     }
     return { kind: 'name-wrong', note, correctNote: s.identifyCorrectAnswer };
+  }, []);
+
+  // ── Degree Answer (scale/name-degree mode) ──
+
+  const handleDegreeAnswer = useCallback((degree: string): DegreeAnswerResult | undefined => {
+    const s = stateRef.current;
+    if (s.identifyAnswered || s.mode !== 'scales' || s.scalePhase !== 'name-degree') return undefined;
+
+    const correct = degree === s.identifyCorrectAnswer;
+    const newStreak = correct ? streakRef.current + 1 : 0;
+    streakRef.current = newStreak;
+
+    const newCells = new Map(s.cellStates);
+    if (s.highlightedPos) {
+      newCells.set(
+        cellKey(s.highlightedPos.string, s.highlightedPos.fret),
+        correct ? 'correct' : 'wrong',
+      );
+    }
+
+    dispatch({
+      type: 'PATCH',
+      patch: {
+        identifyAnswered: true,
+        identifyLastResult: { correct, picked: degree },
+        cellStates: newCells,
+        streak: newStreak,
+        ...(correct
+          ? { score: s.score + 1, bestStreak: Math.max(s.bestStreak, newStreak) }
+          : { score: Math.max(0, s.score - 1), misses: s.misses + 1 }),
+      },
+    });
+
+    if (correct && s.highlightedPos) {
+      return { kind: 'degree-correct', degree, string: s.highlightedPos.string, fret: s.highlightedPos.fret };
+    }
+    return { kind: 'degree-wrong', picked: degree, correctDegree: s.identifyCorrectAnswer };
   }, []);
 
   // ── Settings Wrappers ──
@@ -344,16 +484,29 @@ export function useGameEngine() {
   const changeIdentifyChoices = useCallback((n: number) => {
     startRound({ numChoices: n });
   }, [startRound]);
+  const changeScaleRoot = useCallback((root: string) => {
+    startRound({ scaleRoot: root });
+  }, [startRound]);
+  const changeScaleType = useCallback((scaleType: ScaleType) => {
+    startRound({ scaleType });
+  }, [startRound]);
+  const changeScalePhase = useCallback((scalePhase: ScalePhase) => {
+    startRound({ scalePhase, misses: 0 });
+  }, [startRound]);
 
   return {
     state,
     startRound,
     handleClick,
     handleNameAnswer,
+    handleDegreeAnswer,
     changeStrings,
     changeFrets,
     changeMode,
     changeIdentifyPhase,
     changeIdentifyChoices,
+    changeScaleRoot,
+    changeScaleType,
+    changeScalePhase,
   };
 }

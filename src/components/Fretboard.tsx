@@ -5,7 +5,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { FC } from 'react';
-import type { NoteState } from '@/types.ts';
+import type { NoteState, DegreeInfo } from '@/types.ts';
 import { noteAt, displayNote, cellKey } from '@/engine/music.ts';
 import { cn } from '@/lib/utils.ts';
 
@@ -34,10 +34,11 @@ interface FretboardProps {
   roundKey: number;
   onCellClick: (s: string, f: number) => unknown;
   dimStrings?: Set<string>;
+  scaleMap?: Map<string, DegreeInfo>;
 }
 
 const Fretboard: FC<FretboardProps> = ({
-  activeStrings, maxFret, cellStates, roundComplete, roundKey, onCellClick, dimStrings,
+  activeStrings, maxFret, cellStates, roundComplete, roundKey, onCellClick, dimStrings, scaleMap,
 }) => {
   const frets = Array.from({ length: maxFret }, (_, i) => i + 1);
   const widths = useMemo(() => computeFretWidths(maxFret), [maxFret]);
@@ -99,6 +100,7 @@ const Fretboard: FC<FretboardProps> = ({
               fretWidths={widths}
               cellStates={cellStates}
               onClick={onCellClick}
+              scaleMap={scaleMap}
             />
           </div>
         ))}
@@ -132,22 +134,25 @@ interface StringRowProps {
   fretWidths: number[];
   cellStates: Map<string, NoteState>;
   onClick: (s: string, f: number) => unknown;
+  scaleMap?: Map<string, DegreeInfo>;
 }
 
 const StringRow: FC<StringRowProps> = ({
-  stringName, stringIndex, maxFret, fretWidths, cellStates, onClick,
+  stringName, stringIndex, maxFret, fretWidths, cellStates, onClick, scaleMap,
 }) => {
   const [vibrating, setVibrating] = useState(false);
   const thickness = [1.8, 2.5, 3.5, 5][stringIndex] ?? 2.5;
   const isWound = stringIndex >= 2;
   const frets = Array.from({ length: maxFret }, (_, i) => i + 1);
   const openState = cellStates.get(cellKey(stringName, 0));
+  const openDegree = scaleMap?.get(cellKey(stringName, 0));
 
   const handleClick = useCallback((fret: number) => {
     const result = onClick(stringName, fret);
     if (result && typeof result === 'object' && 'kind' in result) {
       const r = result as { kind: string };
-      if (r.kind === 'game-correct' || r.kind === 'learn' || r.kind === 'identify-find-correct') {
+      if (r.kind === 'game-correct' || r.kind === 'learn' || r.kind === 'identify-find-correct'
+          || r.kind === 'scale-learn' || r.kind === 'scale-degree-correct') {
         setVibrating(true);
         setTimeout(() => setVibrating(false), 400);
       }
@@ -208,13 +213,17 @@ const StringRow: FC<StringRowProps> = ({
         )}
         style={{
           fontFamily: 'inherit',
-          color: openState === 'correct' ? 'hsl(32,95%,62%)' : 'hsl(30,16%,68%)',
-          textShadow: openState === 'correct' ? '0 0 14px hsla(32,95%,54%,0.6)' : 'none',
+          color: openState === 'correct'
+            ? (openDegree?.color || 'hsl(32,95%,62%)')
+            : openDegree && openState === 'revealed'
+              ? openDegree.color
+              : 'hsl(30,16%,68%)',
+          textShadow: openState === 'correct' ? `0 0 14px ${openDegree?.color || 'hsla(32,95%,54%,0.6)'}` : 'none',
           borderRight: '2px solid hsla(42,30%,60%,0.3)',
         }}
         onClick={() => handleClick(0)}
       >
-        {stringName}
+        {openDegree && openState === 'revealed' ? openDegree.label : stringName}
       </button>
 
       {/* Fret cells */}
@@ -227,6 +236,7 @@ const StringRow: FC<StringRowProps> = ({
             widthPct={fretWidths[i]}
             state={cellStates.get(cellKey(stringName, f))}
             onClick={() => handleClick(f)}
+            degreeInfo={scaleMap?.get(cellKey(stringName, f))}
           />
         ))}
       </div>
@@ -242,9 +252,10 @@ interface FretCellProps {
   widthPct: number;
   state: NoteState | undefined;
   onClick: () => void;
+  degreeInfo?: DegreeInfo;
 }
 
-const FretCell: FC<FretCellProps> = ({ stringName, fret, widthPct, state, onClick }) => {
+const FretCell: FC<FretCellProps> = ({ stringName, fret, widthPct, state, onClick, degreeInfo }) => {
   const note = noteAt(stringName, fret);
   const isDot = DOT_FRETS.has(fret);
   const isDouble = DOUBLE_DOT_FRETS.has(fret);
@@ -304,7 +315,7 @@ const FretCell: FC<FretCellProps> = ({ stringName, fret, widthPct, state, onClic
       )}
 
       {/* Note circle */}
-      {state && <NoteCircle state={state} note={note} compact={widthPct < 7} />}
+      {state && <NoteCircle state={state} note={note} compact={widthPct < 7} degreeInfo={degreeInfo} />}
     </button>
   );
 };
@@ -333,9 +344,87 @@ const InlayDot: FC = () => (
 
 /* ─────────── NOTE CIRCLE ─────────── */
 
-const NoteCircle: FC<{ state: NoteState; note: string; compact?: boolean }> = ({ state, note, compact }) => {
+const NoteCircle: FC<{ state: NoteState; note: string; compact?: boolean; degreeInfo?: DegreeInfo }> = ({ state, note, compact, degreeInfo }) => {
   const showLabel = state !== 'target' && state !== 'selectable';
   const isSmall = state === 'hint' || state === 'selectable';
+  const hasDegree = !!degreeInfo;
+
+  // Determine the display text: degree label takes priority in scale mode
+  const label = hasDegree && showLabel
+    ? degreeInfo.label
+    : showLabel
+      ? displayNote(note)
+      : (state === 'target' ? '?' : '\u00B7');
+
+  // Degree-aware styling: use the degree color for revealed/correct/hint states
+  function getDegreeStyle(): React.CSSProperties {
+    if (!degreeInfo) return {};
+    const c = degreeInfo.color;
+    const isRoot = degreeInfo.label === 'R';
+
+    if (state === 'correct') {
+      return {
+        background: `radial-gradient(circle at 38% 32%, ${c}, ${c}88 70%)`,
+        color: 'hsl(20,40%,8%)',
+        boxShadow: `0 0 12px ${c}66`,
+      };
+    }
+    if (state === 'revealed') {
+      return {
+        background: `${c}22`,
+        border: `2px solid ${c}88`,
+        color: c,
+        ...(isRoot ? { boxShadow: `0 0 10px ${c}33` } : {}),
+      };
+    }
+    if (state === 'hint') {
+      return {
+        background: `${c}18`,
+        border: `1px solid ${c}44`,
+        color: `${c}aa`,
+      };
+    }
+    return {};
+  }
+
+  const baseStyle: React.CSSProperties = hasDegree
+    ? (state === 'wrong' ? {
+        background: 'radial-gradient(circle at 40% 35%, hsl(0,72%,60%), hsl(0,65%,42%))',
+        color: 'hsla(0,0%,100%,0.95)',
+      } : state === 'target' ? {
+        background: `radial-gradient(circle at 38% 32%, ${degreeInfo.color}dd, ${degreeInfo.color}88)`,
+        boxShadow: `0 0 18px ${degreeInfo.color}66, 0 0 40px ${degreeInfo.color}1a`,
+        color: 'hsl(38, 28%, 92%)',
+      } : state === 'selectable' ? {
+        background: 'hsla(25, 15%, 18%, 0.65)',
+        border: '2px solid hsla(32, 35%, 48%, 0.5)',
+        boxShadow: '0 0 10px hsla(32, 40%, 50%, 0.08)',
+        color: 'hsl(32, 25%, 55%)',
+      } : getDegreeStyle())
+    : (state === 'correct' ? {
+        background: 'radial-gradient(circle at 38% 32%, hsl(42,100%,72%), hsl(34,92%,56%) 55%, hsl(28,85%,45%))',
+        color: 'hsl(20,40%,8%)',
+      } : state === 'wrong' ? {
+        background: 'radial-gradient(circle at 40% 35%, hsl(0,72%,60%), hsl(0,65%,42%))',
+        color: 'hsla(0,0%,100%,0.95)',
+      } : state === 'target' ? {
+        background: 'radial-gradient(circle at 38% 32%, hsla(32, 90%, 58%, 0.85), hsla(32, 80%, 42%, 0.7))',
+        boxShadow: '0 0 18px hsla(32, 90%, 54%, 0.4), 0 0 40px hsla(32, 80%, 50%, 0.12)',
+        color: 'hsl(38, 28%, 92%)',
+      } : state === 'selectable' ? {
+        background: 'hsla(25, 15%, 18%, 0.65)',
+        border: '2px solid hsla(32, 35%, 48%, 0.5)',
+        boxShadow: '0 0 10px hsla(32, 40%, 50%, 0.08)',
+        color: 'hsl(32, 25%, 55%)',
+      } : state === 'hint' ? {
+        background: 'hsla(25,20%,15%,0.6)',
+        border: '1px solid hsla(25,15%,35%,0.4)',
+        color: 'hsl(25,12%,52%)',
+      } : {
+        background: 'hsla(25,30%,18%,0.85)',
+        border: '2px solid hsla(32,40%,55%,0.6)',
+        color: 'hsl(38,30%,82%)',
+      });
 
   return (
     <div
@@ -352,37 +441,9 @@ const NoteCircle: FC<{ state: NoteState; note: string; compact?: boolean }> = ({
         state === 'revealed' && "animate-reveal",
         state === 'target' && "animate-target-pulse",
       )}
-      style={{
-        ...(state === 'correct' ? {
-          background: 'radial-gradient(circle at 38% 32%, hsl(42,100%,72%), hsl(34,92%,56%) 55%, hsl(28,85%,45%))',
-          color: 'hsl(20,40%,8%)',
-        } : state === 'wrong' ? {
-          background: 'radial-gradient(circle at 40% 35%, hsl(0,72%,60%), hsl(0,65%,42%))',
-          color: 'hsla(0,0%,100%,0.95)',
-        } : state === 'target' ? {
-          background: 'radial-gradient(circle at 38% 32%, hsla(32, 90%, 58%, 0.85), hsla(32, 80%, 42%, 0.7))',
-          boxShadow: '0 0 18px hsla(32, 90%, 54%, 0.4), 0 0 40px hsla(32, 80%, 50%, 0.12)',
-          color: 'hsl(38, 28%, 92%)',
-        } : state === 'selectable' ? {
-          background: 'hsla(25, 15%, 18%, 0.65)',
-          border: '2px solid hsla(32, 35%, 48%, 0.5)',
-          boxShadow: '0 0 10px hsla(32, 40%, 50%, 0.08)',
-          color: 'hsl(32, 25%, 55%)',
-        } : state === 'hint' ? {
-          background: 'hsla(25,20%,15%,0.6)',
-          border: '1px solid hsla(25,15%,35%,0.4)',
-          color: 'hsl(25,12%,52%)',
-        } : {
-          // revealed
-          background: 'hsla(25,30%,18%,0.85)',
-          border: '2px solid hsla(32,40%,55%,0.6)',
-          color: 'hsl(38,30%,82%)',
-        }),
-      }}
+      style={baseStyle}
     >
-      <span className="leading-none">
-        {showLabel ? displayNote(note) : (state === 'target' ? '?' : '\u00B7')}
-      </span>
+      <span className="leading-none">{label}</span>
     </div>
   );
 };

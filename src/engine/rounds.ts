@@ -7,8 +7,12 @@
 import type { GameState, NoteState } from '@/types.ts';
 import {
   noteAt, cellKey, getActiveStrings,
-  countPositions, pickNote, generateNameChoices, generateFindChoices,
+  countPositions, pickNote, generateNameChoices, generateFindChoices, shuffle,
 } from './music.ts';
+import {
+  computeScaleMap, countDegreePositions,
+  pickTargetDegree, generateDegreeChoices, getScaleDegreeLabels,
+} from './scales.ts';
 
 const DOT_FRETS = [3, 5, 7, 9, 12];
 
@@ -147,6 +151,104 @@ export function startGameRound(
     roundMisses: 0,
     roundKey: state.roundKey + 1,
     roundStartTime: Date.now(),
+    activeStrings,
+  };
+}
+
+// ─── Scale: Learn ───
+
+export function startScaleLearnRound(state: GameState): Partial<GameState> {
+  const activeStrings = getActiveStrings(state.numStrings);
+  const scaleMap = computeScaleMap(state.scaleRoot, state.scaleType, activeStrings, state.maxFret);
+
+  // All scale positions revealed
+  const cells = new Map<string, NoteState>();
+  for (const key of scaleMap.keys()) {
+    cells.set(key, 'revealed');
+  }
+
+  return {
+    targetNote: '',
+    targetDegree: '',
+    totalPositions: 0,
+    foundKeys: new Set(),
+    roundComplete: false,
+    roundMisses: 0,
+    cellStates: cells,
+    scaleMap,
+    roundKey: state.roundKey + 1,
+    activeStrings,
+  };
+}
+
+// ─── Scale: Degree Game ("Find all the 5ths") ───
+
+export function startScaleDegreeGameRound(state: GameState): Partial<GameState> {
+  const activeStrings = getActiveStrings(state.numStrings);
+  const scaleMap = computeScaleMap(state.scaleRoot, state.scaleType, activeStrings, state.maxFret);
+  const degree = pickTargetDegree(state.scaleType, scaleMap, state.targetDegree);
+  const count = countDegreePositions(degree, scaleMap);
+
+  // Show non-target scale notes as hints for context
+  const cells = new Map<string, NoteState>();
+  for (const [key, info] of scaleMap.entries()) {
+    if (info.label !== degree) {
+      cells.set(key, 'hint');
+    }
+  }
+
+  return {
+    targetDegree: degree,
+    targetNote: '',
+    totalPositions: count,
+    foundKeys: new Set(),
+    roundComplete: false,
+    roundMisses: 0,
+    cellStates: cells,
+    scaleMap,
+    roundKey: state.roundKey + 1,
+    roundStartTime: Date.now(),
+    activeStrings,
+  };
+}
+
+// ─── Scale: Name Degree ───
+
+export function startScaleNameDegreeRound(state: GameState): Partial<GameState> {
+  const activeStrings = getActiveStrings(state.numStrings);
+  const scaleMap = computeScaleMap(state.scaleRoot, state.scaleType, activeStrings, state.maxFret);
+
+  // Pick a random scale position
+  const scaleKeys = Array.from(scaleMap.keys());
+  const targetKey = scaleKeys[Math.floor(Math.random() * scaleKeys.length)];
+  const targetInfo = scaleMap.get(targetKey)!;
+
+  // Parse the key to get string and fret
+  const [s, fStr] = targetKey.split(':');
+  const f = parseInt(fStr, 10);
+
+  // Show the target + other scale notes as dim context
+  const cells = new Map<string, NoteState>();
+  for (const key of scaleKeys) {
+    cells.set(key, key === targetKey ? 'target' : 'hint');
+  }
+
+  const choices = generateDegreeChoices(targetInfo.label, state.scaleType);
+
+  return {
+    identifyAnswered: false,
+    identifyLastResult: null,
+    roundComplete: false,
+    roundMisses: 0,
+    roundStartTime: Date.now(),
+    highlightedPos: { string: s, fret: f },
+    identifyCorrectAnswer: targetInfo.label,
+    targetDegree: targetInfo.label,
+    targetNote: '',
+    degreeChoices: choices,
+    cellStates: cells,
+    scaleMap,
+    roundKey: state.roundKey + 1,
     activeStrings,
   };
 }
