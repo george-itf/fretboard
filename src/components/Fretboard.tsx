@@ -1,14 +1,20 @@
-import { useCallback, useMemo, useState, type FC } from 'react';
-import { noteAt, displayNote, type NoteState } from '@/hooks/useGame';
-import { cn } from '@/lib/utils';
+// ─── Fretboard Rendering ───
+//
+// Renders a bass guitar neck with realistic fret spacing,
+// string differentiation, pearl inlays, and note circles.
+
+import { useCallback, useMemo, useState } from 'react';
+import type { FC } from 'react';
+import type { NoteState } from '@/types.ts';
+import { noteAt, displayNote, cellKey } from '@/engine/music.ts';
+import { cn } from '@/lib/utils.ts';
 
 const DOT_FRETS = new Set([3, 5, 7, 9]);
 const DOUBLE_DOT_FRETS = new Set([12]);
 const ROW_H = 82;
 
 /**
- * Real fret spacing: on a fretted instrument, the width of fret space N
- * is proportional to 1 / 2^((N-1)/12).
+ * Real fret spacing: width of fret N is proportional to 1 / 2^((N-1)/12).
  * Fret 1 is widest, fret 12 is ~53% of fret 1's width.
  */
 function computeFretWidths(maxFret: number): number[] {
@@ -17,21 +23,21 @@ function computeFretWidths(maxFret: number): number[] {
     raw.push(1 / Math.pow(2, (f - 1) / 12));
   }
   const total = raw.reduce((a, b) => a + b, 0);
-  return raw.map(w => (w / total) * 100); // percentages
+  return raw.map(w => (w / total) * 100);
 }
 
 interface FretboardProps {
   activeStrings: string[];
   maxFret: number;
-  targetNote: string;
   cellStates: Map<string, NoteState>;
   roundComplete: boolean;
   roundKey: number;
-  onCellClick: (s: string, f: number) => { correct: boolean; note: string } | undefined;
+  onCellClick: (s: string, f: number) => unknown;
+  dimStrings?: Set<string>;
 }
 
 const Fretboard: FC<FretboardProps> = ({
-  activeStrings, maxFret, cellStates, roundComplete, roundKey, onCellClick,
+  activeStrings, maxFret, cellStates, roundComplete, roundKey, onCellClick, dimStrings,
 }) => {
   const frets = Array.from({ length: maxFret }, (_, i) => i + 1);
   const widths = useMemo(() => computeFretWidths(maxFret), [maxFret]);
@@ -58,7 +64,7 @@ const Fretboard: FC<FretboardProps> = ({
         ))}
       </div>
 
-      {/* ═══ THE NECK ═══ */}
+      {/* The neck */}
       <div
         className={cn(
           "fretboard-wood relative overflow-hidden",
@@ -77,15 +83,24 @@ const Fretboard: FC<FretboardProps> = ({
         key={roundKey}
       >
         {activeStrings.map((s, si) => (
-          <StringRow
-            key={`${s}-${roundKey}`}
-            stringName={s}
-            stringIndex={si}
-            maxFret={maxFret}
-            fretWidths={widths}
-            cellStates={cellStates}
-            onClick={onCellClick}
-          />
+          <div
+            key={`${s}-${roundKey}-wrap`}
+            style={{
+              opacity: dimStrings?.has(s) ? 0.2 : 1,
+              transition: 'opacity 0.3s ease',
+              pointerEvents: dimStrings?.has(s) ? 'none' : 'auto',
+            }}
+          >
+            <StringRow
+              key={`${s}-${roundKey}`}
+              stringName={s}
+              stringIndex={si}
+              maxFret={maxFret}
+              fretWidths={widths}
+              cellStates={cellStates}
+              onClick={onCellClick}
+            />
+          </div>
         ))}
       </div>
 
@@ -116,7 +131,7 @@ interface StringRowProps {
   maxFret: number;
   fretWidths: number[];
   cellStates: Map<string, NoteState>;
-  onClick: (s: string, f: number) => { correct: boolean; note: string } | undefined;
+  onClick: (s: string, f: number) => unknown;
 }
 
 const StringRow: FC<StringRowProps> = ({
@@ -126,13 +141,16 @@ const StringRow: FC<StringRowProps> = ({
   const thickness = [1.8, 2.5, 3.5, 5][stringIndex] ?? 2.5;
   const isWound = stringIndex >= 2;
   const frets = Array.from({ length: maxFret }, (_, i) => i + 1);
-  const openState = cellStates.get(`${stringName}:0`);
+  const openState = cellStates.get(cellKey(stringName, 0));
 
   const handleClick = useCallback((fret: number) => {
     const result = onClick(stringName, fret);
-    if (result?.correct) {
-      setVibrating(true);
-      setTimeout(() => setVibrating(false), 400);
+    if (result && typeof result === 'object' && 'kind' in result) {
+      const r = result as { kind: string };
+      if (r.kind === 'game-correct' || r.kind === 'learn' || r.kind === 'identify-find-correct') {
+        setVibrating(true);
+        setTimeout(() => setVibrating(false), 400);
+      }
     }
     return result;
   }, [onClick, stringName]);
@@ -207,7 +225,7 @@ const StringRow: FC<StringRowProps> = ({
             stringName={stringName}
             fret={f}
             widthPct={fretWidths[i]}
-            state={cellStates.get(`${stringName}:${f}`)}
+            state={cellStates.get(cellKey(stringName, f))}
             onClick={() => handleClick(f)}
           />
         ))}
@@ -243,7 +261,7 @@ const FretCell: FC<FretCellProps> = ({ stringName, fret, widthPct, state, onClic
       style={{ height: ROW_H, width: `${widthPct}%` }}
       onClick={onClick}
     >
-      {/* Fret wire - bright chrome */}
+      {/* Fret wire */}
       <div
         className="absolute left-0 top-[2px] bottom-[2px] z-[4]"
         style={{
@@ -285,7 +303,7 @@ const FretCell: FC<FretCellProps> = ({ stringName, fret, widthPct, state, onClic
         </div>
       )}
 
-      {/* Note circle - scales down on narrow frets */}
+      {/* Note circle */}
       {state && <NoteCircle state={state} note={note} compact={widthPct < 7} />}
     </button>
   );
@@ -315,38 +333,58 @@ const InlayDot: FC = () => (
 
 /* ─────────── NOTE CIRCLE ─────────── */
 
-const NoteCircle: FC<{ state: NoteState; note: string; compact?: boolean }> = ({ state, note, compact }) => (
-  <div
-    className={cn(
-      "rounded-full flex items-center justify-center",
-      "font-mono font-bold relative z-[6] select-none",
-      state === 'hint'
-        ? (compact ? "w-[32px] h-[32px] text-[10px]" : "w-[38px] h-[38px] text-[11px]")
-        : (compact ? "w-[38px] h-[38px] text-[11px]" : "w-[48px] h-[48px] text-[13px]"),
-      state === 'correct' && "animate-bloom",
-      state === 'wrong' && "animate-shake",
-      state === 'revealed' && "animate-reveal",
-    )}
-    style={{
-      ...(state === 'correct' ? {
-        background: 'radial-gradient(circle at 38% 32%, hsl(42,100%,72%), hsl(34,92%,56%) 55%, hsl(28,85%,45%))',
-        color: 'hsl(20,40%,8%)',
-      } : state === 'wrong' ? {
-        background: 'radial-gradient(circle at 40% 35%, hsl(0,72%,60%), hsl(0,65%,42%))',
-        color: 'hsla(0,0%,100%,0.95)',
-      } : state === 'hint' ? {
-        background: 'hsla(25,20%,15%,0.6)',
-        border: '1px solid hsla(25,15%,35%,0.4)',
-        color: 'hsl(25,12%,52%)',
-      } : {
-        background: 'hsla(25,30%,18%,0.85)',
-        border: '2px solid hsla(32,40%,55%,0.6)',
-        color: 'hsl(38,30%,82%)',
-      }),
-    }}
-  >
-    <span className="leading-none">{displayNote(note)}</span>
-  </div>
-);
+const NoteCircle: FC<{ state: NoteState; note: string; compact?: boolean }> = ({ state, note, compact }) => {
+  const showLabel = state !== 'target' && state !== 'selectable';
+  const isSmall = state === 'hint' || state === 'selectable';
+
+  return (
+    <div
+      className={cn(
+        "rounded-full flex items-center justify-center",
+        "font-mono font-bold relative z-[6] select-none",
+        isSmall
+          ? (compact ? "w-[32px] h-[32px] text-[10px]" : "w-[38px] h-[38px] text-[11px]")
+          : state === 'target'
+            ? (compact ? "w-[40px] h-[40px] text-[14px]" : "w-[50px] h-[50px] text-[16px]")
+            : (compact ? "w-[38px] h-[38px] text-[11px]" : "w-[48px] h-[48px] text-[13px]"),
+        state === 'correct' && "animate-bloom",
+        state === 'wrong' && "animate-shake",
+        state === 'revealed' && "animate-reveal",
+        state === 'target' && "animate-target-pulse",
+      )}
+      style={{
+        ...(state === 'correct' ? {
+          background: 'radial-gradient(circle at 38% 32%, hsl(42,100%,72%), hsl(34,92%,56%) 55%, hsl(28,85%,45%))',
+          color: 'hsl(20,40%,8%)',
+        } : state === 'wrong' ? {
+          background: 'radial-gradient(circle at 40% 35%, hsl(0,72%,60%), hsl(0,65%,42%))',
+          color: 'hsla(0,0%,100%,0.95)',
+        } : state === 'target' ? {
+          background: 'radial-gradient(circle at 38% 32%, hsla(32, 90%, 58%, 0.85), hsla(32, 80%, 42%, 0.7))',
+          boxShadow: '0 0 18px hsla(32, 90%, 54%, 0.4), 0 0 40px hsla(32, 80%, 50%, 0.12)',
+          color: 'hsl(38, 28%, 92%)',
+        } : state === 'selectable' ? {
+          background: 'hsla(25, 15%, 18%, 0.65)',
+          border: '2px solid hsla(32, 35%, 48%, 0.5)',
+          boxShadow: '0 0 10px hsla(32, 40%, 50%, 0.08)',
+          color: 'hsl(32, 25%, 55%)',
+        } : state === 'hint' ? {
+          background: 'hsla(25,20%,15%,0.6)',
+          border: '1px solid hsla(25,15%,35%,0.4)',
+          color: 'hsl(25,12%,52%)',
+        } : {
+          // revealed
+          background: 'hsla(25,30%,18%,0.85)',
+          border: '2px solid hsla(32,40%,55%,0.6)',
+          color: 'hsl(38,30%,82%)',
+        }),
+      }}
+    >
+      <span className="leading-none">
+        {showLabel ? displayNote(note) : (state === 'target' ? '?' : '\u00B7')}
+      </span>
+    </div>
+  );
+};
 
 export default Fretboard;

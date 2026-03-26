@@ -184,6 +184,18 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes target-pulse {
+  0%, 100% {
+    box-shadow: 0 0 18px hsla(32, 90%, 54%, 0.4), 0 0 40px hsla(32, 80%, 50%, 0.12);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 26px hsla(32, 90%, 54%, 0.55), 0 0 50px hsla(32, 80%, 50%, 0.2);
+    transform: scale(1.06);
+  }
+}
+
+.animate-target-pulse { animation: target-pulse 1.8s ease-in-out infinite; }
 .animate-bloom { animation: note-bloom 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 .animate-shake { animation: note-shake 0.42s ease forwards; }
 .animate-vibrate { animation: string-vibrate 0.4s ease forwards; }
